@@ -28,6 +28,7 @@
             top: 0;
             left: 0;
             z-index: 1;
+            display: none;
         }
         /* HUD UI Overlay */
         #hud {
@@ -42,6 +43,7 @@
             flex-direction: column;
             justify-content: space-between;
             padding: 20px;
+            display: none;
         }
         .hud-top {
             display: flex;
@@ -101,7 +103,7 @@
             height: 100%;
             z-index: 20;
             pointer-events: none;
-            display: none; /* Enabled via JS if touch device */
+            display: none;
         }
         .joystick-base {
             position: absolute;
@@ -126,7 +128,6 @@
             box-shadow: 0 0 15px #00f3ff;
             border-radius: 50%;
             pointer-events: none;
-            transition: background 0.2s;
         }
         .action-buttons {
             position: absolute;
@@ -175,7 +176,7 @@
             left: 0;
             width: 100%;
             height: 100%;
-            background: rgba(5, 5, 10, 0.92);
+            background: rgba(5, 5, 10, 0.95);
             z-index: 100;
             display: flex;
             flex-direction: column;
@@ -240,9 +241,10 @@
         }
     </style>
 
+    <!-- Dependencies -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/examples/js/postprocessing/EffectComposer.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/examples/js/postprocessing/RenderPass.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/examples/js/postprocessing/ShaderPass.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/examples/js/postprocessing/UnrealBloomPass.js"></script>
@@ -260,8 +262,8 @@
                 <li><span>W / S / Up / Down:</span> Accelerate / Brake / Reverse</li>
                 <li><span>A / D / Left / Right:</span> Steer Left / Right</li>
                 <li><span>SPACEBAR:</span> Ollie (Jump & Air Tricks)</li>
-                <li><span>SHIFT:</span> Manual / Lean / Grind Boost</li>
-                <li><span>RAMP RIDING:</span> Gain insane air and speed in the skatepark!</li>
+                <li><span>SHIFT:</span> Turbo Boost</li>
+                <li><span>RAMP RIDING:</span> Gain insane air and speed in the neon park!</li>
                 <li><span>RAIL GRIND:</span> Align with glowing rails to grind!</li>
             </ul>
         </div>
@@ -298,29 +300,21 @@
     </div>
 
     <script>
-        // --- GAME STATE & CONFIGURATION ---
         let scene, camera, renderer, composer, clock;
-        let world; // Cannon physics world
+        let world; 
         let skaterBody, skaterMesh, skateboardMesh;
         let skateWheels = [];
-        let physicsBodies = [];
-        let meshesToUpdate = [];
 
-        // Input controls
         const keys = { forward: false, backward: false, left: false, right: false, ollie: false, boost: false };
-        let touchData = { active: false, x: 0, y: 0, deltaX: 0, deltaY: 0 };
-
-        // Game telemetry
         let score = 0;
         let multiplier = 1;
-        let currentCombo = 0;
-        let isGrounded = false;
-        let isGrinding = false;
         let currentSpeed = 0;
-        let airTime = 0;
+        let isGrounded = false;
+        let playerHeading = 0;
         let comboTimeout = null;
+        let gameInitialized = false;
 
-        // Procedural Texture Generator helpers
+        // Procedural Texture Generator
         function createNoiseTexture(width, height, baseColor, accentColor, type = 'concrete') {
             const canvas = document.createElement('canvas');
             canvas.width = width;
@@ -331,7 +325,7 @@
             ctx.fillRect(0, 0, width, height);
 
             if (type === 'concrete') {
-                for (let i = 0; i < width * height * 0.05; i++) {
+                for (let i = 0; i < width * height * 0.04; i++) {
                     const x = Math.random() * width;
                     const y = Math.random() * height;
                     const rad = Math.random() * 2;
@@ -340,7 +334,6 @@
                     ctx.arc(x, y, rad, 0, Math.PI * 2);
                     ctx.fill();
                 }
-                // Grid lines for retro cyberpunk feel
                 ctx.strokeStyle = accentColor;
                 ctx.lineWidth = 2;
                 ctx.globalAlpha = 0.15;
@@ -351,13 +344,6 @@
                 for (let y = 0; y <= height; y += step) {
                     ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke();
                 }
-            } else if (type === 'metal') {
-                ctx.fillStyle = accentColor;
-                for (let i = 0; i < 50; i++) {
-                    const y = Math.random() * height;
-                    ctx.globalAlpha = Math.random() * 0.2;
-                    ctx.fillRect(0, y, width, Math.random() * 4);
-                }
             }
             const texture = new THREE.CanvasTexture(canvas);
             texture.wrapS = THREE.RepeatWrapping;
@@ -365,12 +351,25 @@
             return texture;
         }
 
-        // --- INITIALIZATION ---
-        function initGame() {
-            // Hide start overlay
-            document.getElementById('start-screen').style.display = 'none';
+        // Attach initialization to button click with safety check
+        window.addEventListener('DOMContentLoaded', () => {
+            const startBtn = document.getElementById('start-btn');
+            if (startBtn) {
+                startBtn.addEventListener('click', () => {
+                    if (!gameInitialized) {
+                        gameInitialized = true;
+                        initGame();
+                    }
+                });
+            }
+        });
 
-            // Check if mobile device to show touch controls
+        function initGame() {
+            // Hide start overlay & show HUD/canvas
+            document.getElementById('start-screen').style.display = 'none';
+            document.getElementById('canvas-container').style.display = 'block';
+            document.getElementById('hud').style.display = 'flex';
+
             if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
                 document.getElementById('touch-controls').style.display = 'block';
                 setupTouchControls();
@@ -394,37 +393,26 @@
 
             // Setup Cannon.js physics world
             world = new CANNON.World();
-            world.gravity.set(0, -22.0, 0); // Arcade gravity for snappier ramps
+            world.gravity.set(0, -22.0, 0);
             world.broadphase = new CANNON.NaiveBroadphase();
             world.solver.iterations = 10;
 
             clock = new THREE.Clock();
 
-            // Setup Lighting & Environment
             setupLighting();
             setupEnvironment();
             setupSkater();
-
-            // Setup Post-Processing Pipeline
             setupPostProcessing();
-
-            // Setup Keyboard Input Listeners
             setupKeyboard();
 
-            // Handle Window Resize
             window.addEventListener('resize', onWindowResize);
-
-            // Start Animation Loop
             animate();
         }
 
-        // --- LIGHTING & ENVIRONMENT ---
         function setupLighting() {
-            // Ambient light for base illumination
             const ambientLight = new THREE.AmbientLight(0x1a1a3a, 1.5);
             scene.add(ambientLight);
 
-            // Main Sun Directional Light (Cyan/White) casting shadows
             const sunLight = new THREE.DirectionalLight(0xe0f7ff, 2.0);
             sunLight.position.set(30, 50, 20);
             sunLight.castShadow = true;
@@ -440,7 +428,6 @@
             sunLight.shadow.bias = -0.0005;
             scene.add(sunLight);
 
-            // Neon Point Lights (Hot Pink & Electric Cyan) for retro-futuristic mood
             const pinkLight = new THREE.PointLight(0xff007f, 5, 45);
             pinkLight.position.set(-20, 8, -15);
             scene.add(pinkLight);
@@ -453,7 +440,6 @@
             purpleLight.position.set(0, 10, -35);
             scene.add(purpleLight);
 
-            // Add glowing visual markers for neon lights
             const sphereGeo = new THREE.SphereGeometry(0.5, 16, 16);
             const pinkMat = new THREE.MeshBasicMaterial({ color: 0xff007f });
             const cyanMat = new THREE.MeshBasicMaterial({ color: 0x00f3ff });
@@ -463,7 +449,6 @@
         }
 
         function setupEnvironment() {
-            // Procedural concrete texture
             const concreteTex = createNoiseTexture(512, 512, '#151522', '#00f3ff', 'concrete');
             concreteTex.repeat.set(10, 10);
 
@@ -474,7 +459,7 @@
                 bumpScale: 0.05
             });
 
-            // 1. Ground Plane
+            // Ground Plane
             const groundSize = 120;
             const groundGeo = new THREE.PlaneGeometry(groundSize, groundSize);
             const groundMesh = new THREE.Mesh(groundGeo, concreteMat);
@@ -488,37 +473,27 @@
             groundBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
             world.addBody(groundBody);
 
-            // 2. Neon Skatepark Ramps & Obstacles
-            // Create Quarter Pipes
+            // Ramps & Obstacles
             createRamp(0, 2, -35, 20, 4, 6, 0, concreteMat);
             createRamp(0, 2, 35, 20, 4, 6, Math.PI, concreteMat);
             createRamp(-35, 2, 0, 20, 4, 6, Math.PI / 2, concreteMat);
             createRamp(35, 2, 0, 20, 4, 6, -Math.PI / 2, concreteMat);
 
-            // Create Funbox / Center Platform with rails
             createBoxObstacle(0, 1, 0, 10, 2, 10, concreteMat);
 
-            // Create Rails for Grinding
             createRail(-6, 1.2, 0, 12, 0.25);
             createRail(6, 1.2, 0, 12, 0.25);
-            createRail(0, 2.5, 0, 8, 0.3); // Funbox top rail
+            createRail(0, 2.5, 0, 8, 0.3);
         }
 
         function createRamp(x, y, z, width, height, depth, rotationY, material) {
-            // Visual ramp using Extrude or BufferGeometry approximation for smooth quarter pipe curve
             const curveShape = new THREE.Shape();
             curveShape.moveTo(0, 0);
             curveShape.lineTo(0, height);
             curveShape.quadraticCurveTo(0, 0, depth, 0);
             curveShape.lineTo(0, 0);
 
-            const extrudeSettings = {
-                steps: 2,
-                depth: width,
-                bevelEnabled: false
-            };
-
-            const geom = new THREE.ExtrudeGeometry(curveShape, extrudeSettings);
+            const geom = new THREE.ExtrudeGeometry(curveShape, { steps: 2, depth: width, bevelEnabled: false });
             geom.center();
             const mesh = new THREE.Mesh(geom, material);
             mesh.position.set(x, y, z);
@@ -527,7 +502,6 @@
             mesh.receiveShadow = true;
             scene.add(mesh);
 
-            // Physics body representation (Box approximation or compound shape)
             const shape = new CANNON.Box(new CANNON.Vec3(width/2, height/2, depth/2));
             const body = new CANNON.Body({ mass: 0 });
             body.addShape(shape);
@@ -552,7 +526,6 @@
         }
 
         function createRail(x, y, z, length, height) {
-            // Neon glowing rail
             const railGeo = new THREE.CylinderGeometry(0.12, 0.12, length, 16);
             const railMat = new THREE.MeshStandardMaterial({
                 color: 0x00f3ff,
@@ -567,13 +540,11 @@
             mesh.castShadow = true;
             scene.add(mesh);
 
-            // Support legs
             const legGeo = new THREE.CylinderGeometry(0.08, 0.08, height, 8);
             const legMat = new THREE.MeshStandardMaterial({ color: 0x333344, metalness: 0.8, roughness: 0.2 });
             const l1 = new THREE.Mesh(legGeo, legMat); l1.position.set(x, y - height/2, z - length/3); scene.add(l1);
             const l2 = new THREE.Mesh(legGeo, legMat); l2.position.set(x, y - height/2, z + length/3); scene.add(l2);
 
-            // Physics body for grinding interaction
             const shape = new CANNON.Box(new CANNON.Vec3(0.2, height/2, length/2));
             const body = new CANNON.Body({ mass: 0 });
             body.addShape(shape);
@@ -581,67 +552,41 @@
             world.addBody(body);
         }
 
-        // --- SKATER & SKATEBOARD ---
         function setupSkater() {
-            // Skater Group container
             skaterMesh = new THREE.Group();
 
-            // PBR Materials for Skater
             const outfitMat = new THREE.MeshStandardMaterial({ color: 0x111122, roughness: 0.7, metalness: 0.2 });
             const hoodieMat = new THREE.MeshStandardMaterial({ color: 0xff007f, roughness: 0.5, metalness: 0.1, emissive: 0x33001a });
             const skinMat = new THREE.MeshStandardMaterial({ color: 0xffccaa, roughness: 0.8 });
-            const neonTrimMat = new THREE.MeshStandardMaterial({ color: 0x00f3ff, emissive: 0x00f3ff, emissiveIntensity: 1.0 });
 
-            // Torso
-            const torsoGeo = new THREE.BoxGeometry(0.6, 0.7, 0.35);
-            const torso = new THREE.Mesh(torsoGeo, hoodieMat);
+            const torso = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.7, 0.35), hoodieMat);
             torso.position.y = 1.0;
             torso.castShadow = true;
             skaterMesh.add(torso);
 
-            // Head
-            const headGeo = new THREE.BoxGeometry(0.35, 0.35, 0.35);
-            const head = new THREE.Mesh(headGeo, skinMat);
+            const head = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.35, 0.35), skinMat);
             head.position.set(0, 1.5, 0);
             head.castShadow = true;
             skaterMesh.add(head);
 
-            // Limbs (Arms & Legs stylized as sleek cyberpunk segments)
             const armGeo = new THREE.BoxGeometry(0.2, 0.6, 0.2);
-            const leftArm = new THREE.Mesh(armGeo, outfitMat);
-            leftArm.position.set(-0.45, 1.0, 0);
-            skaterMesh.add(leftArm);
-
-            const rightArm = new THREE.Mesh(armGeo, outfitMat);
-            rightArm.position.set(0.45, 1.0, 0);
-            skaterMesh.add(rightArm);
+            const leftArm = new THREE.Mesh(armGeo, outfitMat); leftArm.position.set(-0.45, 1.0, 0); skaterMesh.add(leftArm);
+            const rightArm = new THREE.Mesh(armGeo, outfitMat); rightArm.position.set(0.45, 1.0, 0); skaterMesh.add(rightArm);
 
             const legGeo = new THREE.BoxGeometry(0.22, 0.7, 0.22);
-            const leftLeg = new THREE.Mesh(legGeo, outfitMat);
-            leftLeg.position.set(-0.2, 0.4, 0);
-            skaterMesh.add(leftLeg);
+            const leftLeg = new THREE.Mesh(legGeo, outfitMat); leftLeg.position.set(-0.2, 0.4, 0); skaterMesh.add(leftLeg);
+            const rightLeg = new THREE.Mesh(legGeo, outfitMat); rightLeg.position.set(0.2, 0.4, 0); skaterMesh.add(rightLeg);
 
-            const rightLeg = new THREE.Mesh(legGeo, outfitMat);
-            rightLeg.position.set(0.2, 0.4, 0);
-            skaterMesh.add(rightLeg);
-
-            // Skateboard Setup
-            const deckGeo = new THREE.BoxGeometry(0.5, 0.08, 1.4);
             const deckMat = new THREE.MeshStandardMaterial({ color: 0x151522, roughness: 0.3, metalness: 0.5 });
-            skateboardMesh = new THREE.Mesh(deckGeo, deckMat);
+            skateboardMesh = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.08, 1.4), deckMat);
             skateboardMesh.position.set(0, 0.2, 0);
             skateboardMesh.castShadow = true;
             skaterMesh.add(skateboardMesh);
 
-            // Wheels
             const wheelGeo = new THREE.CylinderGeometry(0.12, 0.12, 0.1, 16);
             const wheelMat = new THREE.MeshStandardMaterial({ color: 0x00f3ff, emissive: 0x00f3ff, emissiveIntensity: 0.5 });
             
-            const wheelPositions = [
-                [-0.22, 0.1, 0.5], [0.22, 0.1, 0.5],
-                [-0.22, 0.1, -0.5], [0.22, 0.1, -0.5]
-            ];
-            wheelPositions.forEach(pos => {
+            [[ -0.22, 0.1, 0.5 ], [ 0.22, 0.1, 0.5 ], [ -0.22, 0.1, -0.5 ], [ 0.22, 0.1, -0.5 ]].forEach(pos => {
                 const wheel = new THREE.Mesh(wheelGeo, wheelMat);
                 wheel.rotation.z = Math.PI / 2;
                 wheel.position.set(pos[0], pos[1], pos[2]);
@@ -651,7 +596,6 @@
 
             scene.add(skaterMesh);
 
-            // Physics Body for Skater (Sphere/Box combo for arcade handling)
             const skaterShape = new CANNON.Box(new CANNON.Vec3(0.5, 0.9, 0.5));
             skaterBody = new CANNON.Body({
                 mass: 75,
@@ -660,32 +604,24 @@
             });
             skaterBody.position.set(0, 4, 0);
             skaterBody.linearDamping = 0.4;
-            skaterBody.angularDamping = 0.95; // Prevent unwanted spinning
+            skaterBody.angularDamping = 0.95;
             world.addBody(skaterBody);
         }
 
-        // --- POST-PROCESSING ---
         function setupPostProcessing() {
             composer = new THREE.EffectComposer(renderer);
-            
-            const renderPass = new THREE.RenderPass(scene, camera);
-            composer.addPass(renderPass);
+            composer.addPass(new THREE.RenderPass(scene, camera));
 
-            // Unreal Bloom for Neon Glows
             const bloomPass = new THREE.UnrealBloomPass(
                 new THREE.Vector2(window.innerWidth, window.innerHeight),
-                1.2,  // strength
-                0.4,  // radius
-                0.75  // threshold
+                1.2, 0.4, 0.75
             );
             composer.addPass(bloomPass);
 
-            // SMAA Antialiasing pass for sharp high-end look
             const smaaPass = new THREE.SMAAPass(window.innerWidth * renderer.getPixelRatio(), window.innerHeight * renderer.getPixelRatio());
             composer.addPass(smaaPass);
         }
 
-        // --- INPUT HANDLING ---
         function setupKeyboard() {
             window.addEventListener('keydown', (e) => {
                 switch(e.code) {
@@ -694,7 +630,7 @@
                     case 'KeyA': case 'ArrowLeft': keys.left = true; break;
                     case 'KeyD': case 'ArrowRight': keys.right = true; break;
                     case 'Space': 
-                        if (!keys.ollie) { triggerOllie(); }
+                        if (!keys.ollie) triggerOllie();
                         keys.ollie = true; 
                         e.preventDefault();
                         break;
@@ -712,10 +648,6 @@
                     case 'ShiftLeft': case 'ShiftRight': keys.boost = false; break;
                 }
             });
-
-            document.getElementById('start-btn').addEventListener('click', () => {
-                initGame();
-            });
         }
 
         function setupTouchControls() {
@@ -729,17 +661,15 @@
 
             base.addEventListener('touchstart', (e) => {
                 e.preventDefault();
-                const touch = e.targetTouches[0];
-                touchId = touch.identifier;
-                updateJoystick(touch, base, thumb, maxDist);
+                touchId = e.targetTouches[0].identifier;
+                updateJoystick(e.targetTouches[0], base, thumb, maxDist);
             });
 
             base.addEventListener('touchmove', (e) => {
                 e.preventDefault();
                 for (let i = 0; i < e.targetTouches.length; i++) {
-                    const touch = e.targetTouches[i];
-                    if (touch.identifier === touchId) {
-                        updateJoystick(touch, base, thumb, maxDist);
+                    if (e.targetTouches[i].identifier === touchId) {
+                        updateJoystick(e.targetTouches[i], base, thumb, maxDist);
                     }
                 }
             });
@@ -756,60 +686,32 @@
             base.addEventListener('touchend', resetJoystick);
             base.addEventListener('touchcancel', resetJoystick);
 
-            ollieBtn.addEventListener('touchstart', (e) => {
-                e.preventDefault();
-                ollieBtn.classList.add('pressed');
-                triggerOllie();
-            });
-            ollieBtn.addEventListener('touchend', (e) => {
-                e.preventDefault();
-                ollieBtn.classList.remove('pressed');
-            });
-
-            boostBtn.addEventListener('touchstart', (e) => {
-                e.preventDefault();
-                boostBtn.classList.add('pressed');
-                keys.boost = true;
-            });
-            boostBtn.addEventListener('touchend', (e) => {
-                e.preventDefault();
-                boostBtn.classList.remove('pressed');
-                keys.boost = false;
-            });
+            ollieBtn.addEventListener('touchstart', (e) => { e.preventDefault(); triggerOllie(); });
+            boostBtn.addEventListener('touchstart', (e) => { e.preventDefault(); keys.boost = true; });
+            boostBtn.addEventListener('touchend', (e) => { e.preventDefault(); keys.boost = false; });
         }
 
         function updateJoystick(touch, base, thumb, maxDist) {
             const rect = base.getBoundingClientRect();
-            const centerX = rect.left + rect.width / 2;
-            const centerY = rect.top + rect.height / 2;
-            const dx = touch.clientX - centerX;
-            const dy = touch.clientY - centerY;
+            const dx = touch.clientX - (rect.left + rect.width / 2);
+            const dy = touch.clientY - (rect.top + rect.height / 2);
             const dist = Math.sqrt(dx * dx + dy * dy);
+            const angle = Math.atan2(dy, dx);
+            const clampedDist = Math.min(dist, maxDist);
 
-            let angle = Math.atan2(dy, dx);
-            let clampedDist = Math.min(dist, maxDist);
+            thumb.style.transform = `translate(${Math.cos(angle) * clampedDist}px, ${Math.sin(angle) * clampedDist}px)`;
 
-            const thumbX = Math.cos(angle) * clampedDist;
-            const thumbY = Math.sin(angle) * clampedDist;
-            thumb.style.transform = `translate(${thumbX}px, ${thumbY}px)`;
-
-            // Map joystick to arcade movement controls
-            keys.forward = thumbY < -15;
-            keys.backward = thumbY > 15;
-            keys.left = thumbX < -15;
-            keys.right = thumbX > 15;
+            keys.forward = dy < -15;
+            keys.backward = dy > 15;
+            keys.left = dx < -15;
+            keys.right = dx > 15;
         }
-
-        // --- ARCADE SKATEBOARDING PHYSICS & MECHANICS ---
-        let playerHeading = 0;
 
         function triggerOllie() {
             if (isGrounded || skaterBody.position.y < 1.2) {
-                skaterBody.velocity.y = 8.5; // Pop / Ollie height
+                skaterBody.velocity.y = 8.5;
                 isGrounded = false;
                 addScore(250, "OLLIE!");
-                
-                // Add stylized kickflip rotation animation impulse
                 if (Math.random() > 0.5) {
                     showCombo("KICKFLIP +500");
                     addScore(500);
@@ -819,49 +721,35 @@
 
         function updatePhysics(dt) {
             world.step(1 / 60, dt, 3);
-
-            // Ground check (approximate ray/box bottom check)
             isGrounded = skaterBody.position.y < 1.15;
 
-            // Arcade movement forces
-            let moveForce = 28.0;
-            if (keys.boost) moveForce = 48.0;
-            
+            let moveForce = keys.boost ? 48.0 : 28.0;
             let turnSpeed = 2.5;
 
-            // Determine forward direction vector based on heading
-            let forwardVector = new CANNON.Vec3(Math.sin(playerHeading), 0, Math.cos(playerHeading));
-
-            if (keys.left) {
-                playerHeading += turnSpeed * dt;
-            }
-            if (keys.right) {
-                playerHeading -= turnSpeed * dt;
-            }
+            if (keys.left) playerHeading += turnSpeed * dt;
+            if (keys.right) playerHeading -= turnSpeed * dt;
 
             skaterBody.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), playerHeading);
 
+            const fwd = new CANNON.Vec3(Math.sin(playerHeading), 0, Math.cos(playerHeading));
             if (keys.forward) {
-                skaterBody.velocity.x += forwardVector.x * moveForce * dt;
-                skaterBody.velocity.z += forwardVector.z * moveForce * dt;
+                skaterBody.velocity.x += fwd.x * moveForce * dt;
+                skaterBody.velocity.z += fwd.z * moveForce * dt;
             } else if (keys.backward) {
-                skaterBody.velocity.x -= forwardVector.x * (moveForce * 0.5) * dt;
-                skaterBody.velocity.z -= forwardVector.z * (moveForce * 0.5) * dt;
+                skaterBody.velocity.x -= fwd.x * (moveForce * 0.5) * dt;
+                skaterBody.velocity.z -= fwd.z * (moveForce * 0.5) * dt;
             }
 
-            // Natural damping on ground
             if (isGrounded) {
                 skaterBody.velocity.x *= 0.94;
                 skaterBody.velocity.z *= 0.94;
             } else {
-                // Air control
                 skaterBody.velocity.x *= 0.98;
                 skaterBody.velocity.z *= 0.98;
             }
 
-            // Cap max speed
             const speed = Math.sqrt(skaterBody.velocity.x**2 + skaterBody.velocity.z**2);
-            currentSpeed = Math.round(speed * 3.6); // km/h representation
+            currentSpeed = Math.round(speed * 3.6);
             
             const maxSpeed = keys.boost ? 30 : 20;
             if (speed > maxSpeed) {
@@ -869,51 +757,37 @@
                 skaterBody.velocity.z = (skaterBody.velocity.z / speed) * maxSpeed;
             }
 
-            // Sync Three.js mesh with Cannon.js body
             skaterMesh.position.copy(skaterBody.position);
-            
-            // Subtle tilt/lean animation when turning or banking
-            let targetTilt = 0;
-            if (keys.left) targetTilt = 0.25;
-            if (keys.right) targetTilt = -0.25;
+
+            let targetTilt = keys.left ? 0.25 : (keys.right ? -0.25 : 0);
             skateboardMesh.rotation.z = THREE.MathUtils.lerp(skateboardMesh.rotation.z, targetTilt, 0.1);
 
-            // Rotate wheels when moving
             if (speed > 0.5) {
                 skateWheels.forEach(w => w.rotation.x += speed * dt * 0.5);
             }
         }
 
-        // --- CAMERA FOLLOW ---
         function updateCamera() {
-            // Smooth third-person chase camera
-            const offsetDistance = 6.5;
-            const offsetHeight = 2.8;
-
-            const targetX = skaterMesh.position.x - Math.sin(playerHeading) * offsetDistance;
-            const targetZ = skaterMesh.position.z - Math.cos(playerHeading) * offsetDistance;
-            const targetY = skaterMesh.position.y + offsetHeight;
+            const dist = 6.5, height = 2.8;
+            const targetX = skaterMesh.position.x - Math.sin(playerHeading) * dist;
+            const targetZ = skaterMesh.position.z - Math.cos(playerHeading) * dist;
+            const targetY = skaterMesh.position.y + height;
 
             camera.position.x = THREE.MathUtils.lerp(camera.position.x, targetX, 0.1);
             camera.position.y = THREE.MathUtils.lerp(camera.position.y, targetY, 0.1);
             camera.position.z = THREE.MathUtils.lerp(camera.position.z, targetZ, 0.1);
 
-            // Look slightly ahead of the skater
-            const lookAtTarget = new THREE.Vector3(
+            camera.lookAt(
                 skaterMesh.position.x + Math.sin(playerHeading) * 2,
                 skaterMesh.position.y + 1.0,
                 skaterMesh.position.z + Math.cos(playerHeading) * 2
             );
-            camera.lookAt(lookAtTarget);
         }
 
-        // --- UI & SCORE SYSTEM ---
         function addScore(points, trickName = "") {
             score += points * multiplier;
             document.getElementById('score-display').innerText = String(score).padStart(6, '0');
-            if (trickName) {
-                showCombo(trickName + " +" + points);
-            }
+            if (trickName) showCombo(trickName + " +" + points);
         }
 
         function showCombo(text) {
@@ -924,19 +798,15 @@
             setTimeout(() => { box.style.transform = 'scale(1)'; }, 100);
 
             if (comboTimeout) clearTimeout(comboTimeout);
-            comboTimeout = setTimeout(() => {
-                box.style.display = 'none';
-            }, 1800);
+            comboTimeout = setTimeout(() => { box.style.display = 'none'; }, 1800);
         }
 
         function updateHUD() {
             document.getElementById('speed-display').innerText = `SPD: ${currentSpeed} KM/H`;
         }
 
-        // --- RENDER LOOP ---
         function animate() {
             requestAnimationFrame(animate);
-
             const dt = clock.getDelta();
 
             if (world && skaterBody) {
